@@ -1,3 +1,6 @@
 .env_variables.json
 .DS_Store
 .env_shell.json
+gcp_credentials.json
+__pycache__/
+*.pyc
