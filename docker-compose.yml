@@ -7,17 +7,10 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
-    environment:
-      - API_KEY=Gucc09151980Iq2w3e4r
-      - GCP_BUCKET_NAME=air-toolkit-bucket
-      - STORAGE_PROVIDER=GCP
-      - GCP_SA_CREDENTIALS=/app/gcp_credentials.json
-      - GUNICORN_WORKERS=4
-      - MAX_QUEUE_LENGTH=10
-      - ENABLE_ADVANCED_SRT_STYLES=true
+    env_file:
+      - .env.local
     # 不覆蓋應用代碼，只掛載數據目錄
     volumes:
       - ./data:/app/data
       - ./services:/app/services
-      - ./gcp_credentials.json:/app/gcp_credentials.json
     restart: unless-stopped
