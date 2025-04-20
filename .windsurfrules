@@ -1,0 +1,71 @@
+Project Naming and Structure
+
+Maintain original project name "No-Code Architects Toolkit API"
+Follow existing directory structure
+Use lowercase letters and hyphens for naming new files
+
+Code Style
+
+Follow PEP 8 Python coding standards
+Use 4 spaces for indentation, not tabs
+Use snake_case for functions, methods, and variables
+Use CamelCase for classes
+Use UPPERCASE with underscores for constants (e.g., API_KEY)
+
+Git Workflow
+
+Create feature branches from main branch with format feature/feature-name
+Use format fix/bug-description for bug fix branches
+Commit messages should include prefixes [FEATURE], [FIX], or [DOCS]
+All commits should be merged to the build branch, not main or master
+Pull requests must include change descriptions and test results
+
+Environment Variables
+
+No hardcoded environment variable values in code
+Use .env files for local development (add to .gitignore)
+Update environment variable documentation for all new features
+
+API Endpoint Development
+
+All new endpoints must follow the existing /v1/ path structure
+Provide complete documentation for each new endpoint
+Implement effective request validation
+Ensure consistent API response formats
+
+Docker Related
+
+Optimize Dockerfile to reduce image size
+Test all Docker environment variable configurations
+Verify compatibility with different storage providers (GCP, S3, etc.)
+
+Testing Requirements
+
+Write unit tests for all new functionality
+Create integration tests for API endpoints
+Validate across different deployment environments (GCP, Docker, etc.)
+
+Documentation Standards
+
+Update README.md for each new feature
+Add in-code docstrings
+Create deployment guides or update existing ones
+
+Security Standards
+
+Ensure API key validation for all endpoints
+Implement proper input validation and sanitization
+Follow secure file handling practices
+Do not expose sensitive information or files
+
+Performance Considerations
+
+Optimize media processing operations
+Consider reuse and caching of processed files
+Monitor CPU and memory usage
+
+Community Involvement
+
+Maintain original MIT license in code
+Acknowledge all contributors
+Follow the original project's open-source contribution guidelines

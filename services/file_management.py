@@ -52,6 +52,9 @@ def get_extension_from_url(url):
     except:
         pass
 
+    # Log warning for URLs without extensions
+    print(f"Warning: Could not determine file extension from URL: {url}")
+    
     # If we can't determine the extension, raise an error
     raise ValueError(f"Could not determine file extension from URL: {url}")
 

@@ -134,25 +134,107 @@ def process_subtitle_text(text, replace_dict, all_caps, max_words_per_line):
     return text
 
 def srt_to_transcription_result(srt_content):
-    """Convert SRT content into a transcription-like structure for uniform processing."""
+    """Convert SRT content into a transcription-like structure for uniform processing.
+    Enhanced to add word-level timestamps for advanced styling support."""
     subtitles = list(srt.parse(srt_content))
     segments = []
+    
     for sub in subtitles:
+        text = sub.content.strip()
+        start_time = sub.start.total_seconds()
+        end_time = sub.end.total_seconds()
+        duration = end_time - start_time
+        
+        # 使用新的 identify_words 函數識別單詞，確保英文單詞完整性和中文字符的正確處理
+        words_list = identify_words(text)
+        
+        word_count = len(words_list)
+        
+        # Generate word-level timestamps
+        words = []
+        if word_count > 0:
+            word_duration = duration / word_count
+            for i, word in enumerate(words_list):
+                word_start = start_time + (i * word_duration)
+                word_end = word_start + word_duration
+                words.append({
+                    'word': word,
+                    'start': word_start,
+                    'end': word_end
+                })
+        
         segments.append({
-            'start': sub.start.total_seconds(),
-            'end': sub.end.total_seconds(),
-            'text': sub.content.strip(),
-            'words': []  # SRT does not provide word-level timestamps
+            'start': start_time,
+            'end': end_time,
+            'text': text,
+            'words': words  # Now includes word-level timestamps
         })
-    logger.info("Converted SRT content to transcription result.")
+    
+    logger.info("Converted SRT content to transcription result with word-level timestamps.")
     return {'segments': segments}
 
+def is_english_word(word):
+    """Check if a word is an English word (contains only Latin characters, numbers, and common punctuation)."""
+    # 英文單詞通常由拉丁字母、數字和常見標點符號組成
+    return all(ord(c) < 128 for c in word)
+
+def identify_words(text):
+    """Identify words in text, treating English words as units and Chinese characters individually."""
+    # 先按空格分割
+    parts = text.split()
+    words = []
+    
+    for part in parts:
+        # 判斷是否為英文單詞
+        if is_english_word(part):
+            # 英文單詞保持完整
+            words.append(part)
+        else:
+            # 檢查是否為中文字符
+            has_chinese = any(u'一' <= c <= u'鿿' for c in part)
+            
+            if has_chinese:
+                # 對於中文或混合字符，需要逐字符處理
+                # 將混合字符分割為英文字符序列和中文字符
+                current_english = ''
+                
+                for char in part:
+                    # 判斷是否為英文字符
+                    if is_english_word(char):
+                        # 累積英文字符
+                        current_english += char
+                    else:
+                        # 如果已經有累積的英文字符，先添加到結果中
+                        if current_english:
+                            words.append(current_english)
+                            current_english = ''
+                        
+                        # 中文字符單獨處理，確保逐字高亮
+                        words.append(char)
+                
+                # 添加最後累積的英文字符
+                if current_english:
+                    words.append(current_english)
+            else:
+                # 非中文非英文的字符序列，保持完整
+                words.append(part)
+    
+    return words
+
 def split_lines(text, max_words_per_line):
-    """Split text into multiple lines if max_words_per_line > 0."""
+    """Split text into multiple lines if max_words_per_line > 0, preserving word integrity."""
     if max_words_per_line <= 0:
         return [text]
-    words = text.split()
-    lines = [' '.join(words[i:i+max_words_per_line]) for i in range(0, len(words), max_words_per_line)]
+    
+    # 使用新的 identify_words 函數識別單詞
+    words = identify_words(text)
+    
+    # 按指定的每行最大單詞數分割
+    lines = []
+    for i in range(0, len(words), max_words_per_line):
+        line = ' '.join(words[i:i+max_words_per_line])
+        lines.append(line)
+    
     return lines
 
 def is_url(string):
@@ -711,15 +793,12 @@ def process_captioning_v1(video_url, captions, settings, replace, job_id, langua
             else:
                 # Treat as SRT
                 logger.info(f"Job {job_id}: Detected SRT formatted captions.")
-                # Validate style for SRT
-                if style_type != 'classic':
-                    error_message = "Only 'classic' style is supported for SRT captions."
-                    logger.error(f"Job {job_id}: {error_message}")
-                    return {"error": error_message}
+                # Convert SRT to transcription result with word-level timestamps
                 transcription_result = srt_to_transcription_result(captions_content)
                 # Generate ASS based on chosen style
                 subtitle_content = process_subtitle_events(transcription_result, style_type, style_options, replace_dict, video_resolution)
                 subtitle_type = 'ass'
+                logger.info(f"Job {job_id}: Applied '{style_type}' style to SRT captions.")
         else:
             # No captions provided, generate transcription
             logger.info(f"Job {job_id}: No captions provided, generating transcription.")
@@ -754,11 +833,22 @@ def process_captioning_v1(video_url, captions, settings, replace, job_id, langua
 
         # Process video with subtitles using FFmpeg
         try:
-            ffmpeg.input(video_path).output(
-                output_path,
-                vf=f"subtitles='{subtitle_path}'",
-                acodec='copy'
-            ).run(overwrite_output=True)
+            # 根據字幕類型選擇適當的濾鏡
+            if subtitle_type == 'ass':
+                # 使用 ass 濾鏡處理 ASS 格式字幕，以支持高級樣式如高亮效果
+                ffmpeg.input(video_path).output(
+                    output_path,
+                    vf=f"ass='{subtitle_path}'",
+                    acodec='copy'
+                ).run(overwrite_output=True)
+                logger.info(f"Job {job_id}: Using ASS filter for advanced subtitle styles")
+            else:
+                # 對於其他格式使用通用的 subtitles 濾鏡
+                ffmpeg.input(video_path).output(
+                    output_path,
+                    vf=f"subtitles='{subtitle_path}'",
+                    acodec='copy'
+                ).run(overwrite_output=True)
             logger.info(f"Job {job_id}: FFmpeg processing completed. Output saved to {output_path}")
         except ffmpeg.Error as e:
             stderr_output = e.stderr.decode('utf8') if e.stderr else 'Unknown error'

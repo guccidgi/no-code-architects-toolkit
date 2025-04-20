@@ -35,19 +35,36 @@ def initialize_gcp_client():
     GCP_SA_CREDENTIALS = os.getenv('GCP_SA_CREDENTIALS')
 
     if not GCP_SA_CREDENTIALS:
-        #logger.warning("GCP credentials not found. Skipping GCS client initialization.")
+        logger.warning("GCP credentials not found. Skipping GCS client initialization.")
         return None  # Skip client initialization if credentials are missing
 
     # Define the required scopes for Google Cloud Storage
     GCS_SCOPES = ['https://www.googleapis.com/auth/devstorage.full_control']
 
     try:
-        credentials_info = json.loads(GCP_SA_CREDENTIALS)
-        gcs_credentials = service_account.Credentials.from_service_account_info(
-            credentials_info,
-            scopes=GCS_SCOPES
-        )
-        return storage.Client(credentials=gcs_credentials)
+        # Check if GCP_SA_CREDENTIALS is a file path
+        if GCP_SA_CREDENTIALS.startswith('/') or GCP_SA_CREDENTIALS.startswith('./') or GCP_SA_CREDENTIALS.startswith('../'):
+            # It's a file path, read the file
+            logger.info(f"Reading GCP credentials from file: {GCP_SA_CREDENTIALS}")
+            if os.path.exists(GCP_SA_CREDENTIALS):
+                with open(GCP_SA_CREDENTIALS, 'r') as f:
+                    credentials_info = json.load(f)
+                gcs_credentials = service_account.Credentials.from_service_account_info(
+                    credentials_info,
+                    scopes=GCS_SCOPES
+                )
+                return storage.Client(credentials=gcs_credentials)
+            else:
+                logger.error(f"GCP credentials file not found: {GCP_SA_CREDENTIALS}")
+                return None
+        else:
+            # Try to parse as JSON string
+            credentials_info = json.loads(GCP_SA_CREDENTIALS)
+            gcs_credentials = service_account.Credentials.from_service_account_info(
+                credentials_info,
+                scopes=GCS_SCOPES
+            )
+            return storage.Client(credentials=gcs_credentials)
     except Exception as e:
         logger.error(f"Failed to initialize GCS client: {e}")
         return None
