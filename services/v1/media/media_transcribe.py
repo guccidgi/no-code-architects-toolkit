@@ -26,6 +26,7 @@ from services.file_management import download_file
 from services.v1.video.caption_video import identify_words, is_english_word
 import logging
 from config import LOCAL_STORAGE_PATH
+import jieba
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -72,17 +73,32 @@ def process_transcribe_media(media_url, task, include_text, include_srt, include
             subtitle_index = 1
             
             if words_per_line and words_per_line > 0:
-                # 自行實現中文字符分割，確保正確計算字數
-                def split_chinese_text(text):
-                    # 使用正則表達式分割中英文
-                    # 英文單詞、數字和標點符號作為整體
-                    # 中文字符單獨處理
-                    pattern = r'[A-Za-z0-9]+|[\u4e00-\u9fff]|[^\s\w\u4e00-\u9fff]+'
-                    return [m for m in re.findall(pattern, text) if m.strip()]
+                # 使用 jieba 進行中文分詞，確保完整詞彙不被分割
+                def split_text_with_jieba(text):
+                    # 檢測文本中是否包含中文
+                    has_chinese = any('\u4e00' <= c <= '\u9fff' for c in text)
+                    
+                    if has_chinese:
+                        # 使用 jieba 進行中文分詞
+                        jieba_words = list(jieba.cut(text))
+                        # 進一步處理分詞結果，處理混合中英文的情況
+                        words = []
+                        for word in jieba_words:
+                            # 如果是英文單詞，保持完整
+                            if is_english_word(word):
+                                words.append(word)
+                            else:
+                                # 對於中文詞彙或其他字符，使用 identify_words 進一步處理
+                                words.extend(identify_words(word))
+                        return [w for w in words if w.strip()]
+                    else:
+                        # 純英文文本，使用空格分割
+                        return [w for w in text.split() if w.strip()]
                 
                 # 收集所有文字和時間
                 all_words = []
                 all_timings = []
+                all_segments = []
                 
                 # 記錄處理過程
                 logger.info(f"Processing with words_per_line={words_per_line}")
@@ -90,8 +106,8 @@ def process_transcribe_media(media_url, task, include_text, include_srt, include
                 # 收集所有文字和對應的時間點
                 for segment in result['segments']:
                     seg_text = segment['text'].strip()
-                    # 使用我們自己的分詞函數，確保中文字符被正確分割
-                    seg_words = split_chinese_text(seg_text)
+                    # 使用 jieba 進行分詞
+                    seg_words = split_text_with_jieba(seg_text)
                     seg_start = segment['start']
                     seg_end = segment['end']
                     
@@ -100,6 +116,13 @@ def process_transcribe_media(media_url, task, include_text, include_srt, include
                     
                     logger.info(f"Segment: {seg_text}")
                     logger.info(f"Words count: {len(seg_words)}, Words: {seg_words}")
+                    
+                    # 保存段落信息，用於後續智能分割
+                    all_segments.append({
+                        'words': seg_words,
+                        'start': seg_start,
+                        'end': seg_end
+                    })
                     
                     # 計算每個詞的時間
                     duration_per_word = (seg_end - seg_start) / len(seg_words)
@@ -113,34 +136,127 @@ def process_transcribe_media(media_url, task, include_text, include_srt, include
                 
                 logger.info(f"Total words: {len(all_words)}")
                 
-                # 嚴格按照 words_per_line 分割所有文字
-                for i in range(0, len(all_words), words_per_line):
-                    chunk = all_words[i:i + words_per_line]
+                # 智能分割字幕，確保完整詞彙不被分割，同時嚴格遵守每行最大字數
+                def smart_chunk_words(words, timings, target_words_per_line):
+                    chunks = []
+                    current_chunk = []
+                    current_timings = []
+                    current_count = 0
                     
-                    if not chunk:
+                    i = 0
+                    while i < len(words):
+                        word = words[i]
+                        timing = timings[i]
+                        
+                        # 計算當前詞的權重
+                        # 對於中文字符，每個字計為1；對於英文單詞，整個單詞計為1
+                        if any('\u4e00' <= c <= '\u9fff' for c in word):
+                            # 中文詞彙，按字符數計算權重
+                            chinese_chars = sum(1 for c in word if '\u4e00' <= c <= '\u9fff')
+                            non_chinese_chars = len(word) - chinese_chars
+                            word_weight = chinese_chars + (1 if non_chinese_chars > 0 else 0)
+                        else:
+                            # 英文單詞或其他，整體計為1
+                            word_weight = 1
+                        
+                        # 如果添加這個詞會超過目標行數，且當前行已有內容，則結束當前行
+                        if current_count + word_weight > target_words_per_line and current_chunk:
+                            chunks.append((current_chunk, current_timings))
+                            current_chunk = []
+                            current_timings = []
+                            current_count = 0
+                        
+                        # 如果單個詞的權重已經超過目標行數，且這是一個較長的詞，考慮拆分
+                        # 但僅適用於中文詞彙，英文詞彙保持完整
+                        if word_weight > target_words_per_line and any('\u4e00' <= c <= '\u9fff' for c in word):
+                            # 將長中文詞彙拆分為多個小塊
+                            chars = list(word)
+                            for j in range(0, len(chars), target_words_per_line):
+                                sub_word = ''.join(chars[j:j+target_words_per_line])
+                                if not sub_word:
+                                    continue
+                                
+                                # 為拆分的詞計算時間比例
+                                sub_duration = (timing[1] - timing[0]) * (len(sub_word) / len(word))
+                                sub_start = timing[0] + (timing[1] - timing[0]) * (j / len(word))
+                                sub_end = sub_start + sub_duration
+                                
+                                # 如果當前行已有內容且添加會超過限制，先結束當前行
+                                if current_count + len(sub_word) > target_words_per_line and current_chunk:
+                                    chunks.append((current_chunk, current_timings))
+                                    current_chunk = []
+                                    current_timings = []
+                                    current_count = 0
+                                
+                                current_chunk.append(sub_word)
+                                current_timings.append((sub_start, sub_end))
+                                current_count += len(sub_word)
+                                
+                                # 如果當前行已滿，結束當前行
+                                if current_count >= target_words_per_line:
+                                    chunks.append((current_chunk, current_timings))
+                                    current_chunk = []
+                                    current_timings = []
+                                    current_count = 0
+                            i += 1
+                            continue
+                        
+                        # 添加詞到當前行
+                        current_chunk.append(word)
+                        current_timings.append(timing)
+                        current_count += word_weight
+                        i += 1
+                        
+                        # 檢查是否需要結束當前行（句號、問號、驚嘆號等）
+                        if i < len(words) and current_count >= target_words_per_line * 0.5:
+                            next_few_words = ''.join(words[i:i+3]) if i+3 <= len(words) else ''.join(words[i:])
+                            if any(p in word for p in ['。', '.', '!', '?', '！', '？', '…', '，', ',', '；', ';']) or \
+                               any(p in next_few_words for p in ['。', '.', '!', '?', '！', '？', '…']):
+                                chunks.append((current_chunk, current_timings))
+                                current_chunk = []
+                                current_timings = []
+                                current_count = 0
+                    
+                    # 添加最後一行（如果有）
+                    if current_chunk:
+                        chunks.append((current_chunk, current_timings))
+                    
+                    return chunks
+                
+                # 使用智能分割算法
+                chunks = smart_chunk_words(all_words, all_timings, words_per_line)
+                
+                # 創建字幕
+                for chunk_words, chunk_timings in chunks:
+                    if not chunk_words:
                         continue
                     
                     # 計算這個 chunk 的開始和結束時間
-                    chunk_start = all_timings[i][0]
-                    chunk_end = all_timings[min(i + len(chunk) - 1, len(all_timings) - 1)][1]
+                    chunk_start = chunk_timings[0][0]
+                    chunk_end = chunk_timings[-1][1]
                     
-                    # 檢查是否全為中文
-                    has_chinese = False
-                    has_non_chinese = False
+                    # 檢查是否包含中文
+                    has_chinese = any(any('\u4e00' <= c <= '\u9fff' for c in word) for word in chunk_words)
+                    has_non_chinese = any(not all('\u4e00' <= c <= '\u9fff' for c in word) for word in chunk_words if word.strip())
                     
-                    for word in chunk:
-                        if any('\u4e00' <= c <= '\u9fff' for c in word):
-                            has_chinese = True
-                        else:
-                            has_non_chinese = True
-                    
-                    # 如果全是中文，不加空格；否則用空格連接
+                    # 根據內容類型決定如何連接詞彙
                     if has_chinese and not has_non_chinese:
-                        subtitle_text = ''.join(chunk)
+                        # 純中文內容，不加空格
+                        subtitle_text = ''.join(chunk_words)
                     else:
-                        subtitle_text = ' '.join(chunk)
+                        # 混合內容或純英文，需要智能處理空格
+                        subtitle_text = ''
+                        for i, word in enumerate(chunk_words):
+                            if i > 0:
+                                # 如果當前詞和前一個詞都不是中文，添加空格
+                                prev_is_chinese = any('\u4e00' <= c <= '\u9fff' for c in chunk_words[i-1])
+                                curr_is_chinese = any('\u4e00' <= c <= '\u9fff' for c in word)
+                                
+                                if not (prev_is_chinese or curr_is_chinese):
+                                    subtitle_text += ' '
+                            subtitle_text += word
                     
-                    logger.info(f"Subtitle {subtitle_index}: {subtitle_text} (words: {len(chunk)})")
+                    logger.info(f"Subtitle {subtitle_index}: {subtitle_text} (words: {len(chunk_words)})")
                     
                     # 建立字幕
                     srt_subtitles.append(srt.Subtitle(
