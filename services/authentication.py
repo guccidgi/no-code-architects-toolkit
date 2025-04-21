@@ -19,13 +19,16 @@
 from functools import wraps
 from flask import request, jsonify
 from config import API_KEY
+import logging
 
 def authenticate(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
-        api_key = request.headers.get('X-API-Key')
+        # 檢查多種可能的 API 金鑰 header 格式
+        api_key = request.headers.get('X-API-Key') or request.headers.get('x-api-key') or request.headers.get('X-API-KEY')
         
-        if api_key != API_KEY:
-            return jsonify({"message": "Unauthorized"}), 401
+        if not api_key or api_key.lower() != API_KEY.lower():
+            logging.warning(f"Authentication failed - API key mismatch or missing")
+            return jsonify({"message": "Authorization failed - please check your credentials"}), 401
         return func(*args, **kwargs)
     return wrapper

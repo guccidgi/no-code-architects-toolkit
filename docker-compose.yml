@@ -14,3 +14,13 @@ services:
       - ./data:/app/data
       - ./services:/app/services
     restart: unless-stopped
+    # 增加記憶體限制設定 (V2 語法)
+    mem_limit: 16g
+    mem_reservation: 8g
+    # 增加記憶體限制設定 (V1 語法)
+    deploy:
+      resources:
+        limits:
+          memory: 16G  # 設定為 16GB，可根據需要調整
+        reservations:
+          memory: 8G   # 保留 8GB 記憶體

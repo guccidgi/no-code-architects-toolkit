@@ -20,6 +20,7 @@ from flask import Blueprint, request, jsonify, current_app
 from app_utils import *
 from functools import wraps
 import os
+import logging
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -28,8 +29,11 @@ API_KEY = os.environ.get('API_KEY')
 @auth_bp.route('/authenticate', methods=['GET'])
 @queue_task_wrapper(bypass_queue=True)
 def authenticate_endpoint(**kwargs):
-    api_key = request.headers.get('X-API-Key')
-    if api_key == API_KEY:
+    # u6aa2u67e5u591au7a2eu53efu80fdu7684 API u91d1u9470 header u683cu5f0f
+    api_key = request.headers.get('X-API-Key') or request.headers.get('x-api-key') or request.headers.get('X-API-KEY')
+    
+    if api_key and api_key.lower() == API_KEY.lower():
         return "Authorized", "/authenticate", 200
     else:
-        return "Unauthorized", "/authenticate", 401
+        logging.warning(f"Authentication failed - API key mismatch")
+        return "Authorization failed - please check your credentials\nUnauthorized", "/authenticate", 401
