@@ -217,44 +217,114 @@ def srt_to_transcription_result(srt_content):
     subtitles = list(srt.parse(srt_content))
     segments = []
     
+    # 嘗試導入 jieba 庫用於中文分詞
+    try:
+        import jieba
+        JIEBA_AVAILABLE = True
+        logger.info("Jieba 分詞庫已載入，將用於智能中文詞語分割")
+    except ImportError:
+        JIEBA_AVAILABLE = False
+        logger.info("Jieba 分詞庫未安裝，將使用基本中文字符分割方法")
+    
     for sub in subtitles:
         text = sub.content.strip()
         start_time = sub.start.total_seconds()
         end_time = sub.end.total_seconds()
         duration = end_time - start_time
         
-        # 使用新的 identify_words 函數識別單詞，確保英文單詞完整性和中文字符的正確處理
-        words_list = identify_words(text)
+        # 使用智能分詞方法
+        def split_text_with_jieba(text):
+            # 檢測文本中是否包含中文
+            has_chinese = any('\u4e00' <= c <= '\u9fff' for c in text)
+            
+            if has_chinese and JIEBA_AVAILABLE:
+                # 使用 jieba 進行中文分詞
+                jieba_words = list(jieba.cut(text))
+                # 進一步處理分詞結果，處理混合中英文的情況
+                words = []
+                for word in jieba_words:
+                    # 如果是英文單詞，保持完整
+                    if is_english_word(word):
+                        words.append(word)
+                    else:
+                        # 對於中文詞彙或其他字符，使用 identify_words 進一步處理
+                        words.extend(identify_words(word))
+                return [w for w in words if w.strip()]
+            else:
+                # 使用原有的 identify_words 函數
+                return identify_words(text)
         
+        # 使用改進的分詞方法
+        words_list = split_text_with_jieba(text)
         word_count = len(words_list)
         
-        # Generate word-level timestamps
+        # Generate word-level timestamps with weighted durations
         words = []
         if word_count > 0:
-            word_duration = duration / word_count
+            # 計算每個詞的權重，用於更精確的時間分配
+            word_weights = []
+            total_weight = 0
+            
+            for word in words_list:
+                # 對於中文字符，每個字計為1；對於英文單詞，整個單詞計為1
+                if any('\u4e00' <= c <= '\u9fff' for c in word):
+                    # 中文詞彙，按字符數計算權重
+                    chinese_chars = sum(1 for c in word if '\u4e00' <= c <= '\u9fff')
+                    non_chinese_chars = len(word) - chinese_chars
+                    word_weight = chinese_chars + (1 if non_chinese_chars > 0 else 0)
+                else:
+                    # 英文單詞或其他，整體計為1
+                    word_weight = 1
+                
+                word_weights.append(word_weight)
+                total_weight += word_weight
+            
+            # 根據權重分配時間
+            current_time = start_time
             for i, word in enumerate(words_list):
-                word_start = start_time + (i * word_duration)
+                word_duration = (duration * word_weights[i]) / total_weight if total_weight > 0 else 0
+                word_start = current_time
                 word_end = word_start + word_duration
                 words.append({
                     'word': word,
                     'start': word_start,
                     'end': word_end
                 })
+                current_time = word_end
         
         segments.append({
             'start': start_time,
             'end': end_time,
             'text': text,
-            'words': words  # Now includes word-level timestamps
+            'words': words  # Now includes word-level timestamps with weighted durations
         })
     
-    logger.info("Converted SRT content to transcription result with word-level timestamps.")
+    logger.info("Converted SRT content to transcription result with word-level timestamps and improved word segmentation.")
     return {'segments': segments}
 
 def is_english_word(word):
     """Check if a word is an English word (contains only Latin characters, numbers, and common punctuation)."""
     # 英文單詞通常由拉丁字母、數字和常見標點符號組成
     return all(ord(c) < 128 for c in word)
+
+def smart_join_words(words):
+    """智能連接字詞，根據中英文特性決定是否添加空格。"""
+    if not words:
+        return ''
+    
+    result = ''
+    for i, word in enumerate(words):
+        if i > 0:
+            # 檢查當前詞和前一個詞是否為中文
+            prev_is_chinese = any('\u4e00' <= c <= '\u9fff' for c in words[i-1])
+            curr_is_chinese = any('\u4e00' <= c <= '\u9fff' for c in word)
+            
+            # 如果當前詞和前一個詞都不是中文，添加空格
+            if not (prev_is_chinese or curr_is_chinese):
+                result += ' '
+        result += word
+    
+    return result
 
 def identify_words(text):
     """Identify words in text, treating English words as units and Chinese characters individually."""
@@ -697,7 +767,7 @@ def handle_highlight(transcription_result, style_options, replace_dict, video_re
                         line_words.append(f"{{\\c{word_color}}}{w_text}{{\\c{line_color}}}")
                     else:
                         line_words.append(w_text)
-                full_text = ' '.join(line_words)
+                full_text = smart_join_words(line_words)
                 start_time = format_ass_time(w_start)
                 end_time = format_ass_time(w_end)
                 position_tag = f"{{\\an{an_code}\\pos({final_x},{final_y})}}"
@@ -755,7 +825,7 @@ def handle_underline(transcription_result, style_options, replace_dict, video_re
                         line_words.append(f"{{\\u1}}{w_text}{{\\u0}}")
                     else:
                         line_words.append(w_text)
-                full_text = ' '.join(line_words)
+                full_text = smart_join_words(line_words)
                 start_time = format_ass_time(w_start)
                 end_time = format_ass_time(w_end)
                 position_tag = f"{{\\an{an_code}\\pos({final_x},{final_y})}}"
