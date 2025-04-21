@@ -188,7 +188,7 @@ def process_subtitle_text(text, replace_dict, all_caps, max_words_per_line):
                 else:
                     # 如果當前行已有內容，則完成當前行
                     if current_line:
-                        lines.append(' '.join(current_line))
+                        lines.append(smart_join_words(current_line))
                     
                     # 開始新的一行
                     current_line = group.copy()
@@ -200,13 +200,13 @@ def process_subtitle_text(text, replace_dict, all_caps, max_words_per_line):
                     current_line.append(word)
                     word_count += 1
                 else:
-                    lines.append(' '.join(current_line))
+                    lines.append(smart_join_words(current_line))
                     current_line = [word]
                     word_count = 1
         
         # 添加最後一行
         if current_line:
-            lines.append(' '.join(current_line))
+            lines.append(smart_join_words(current_line))
         
         text = r'\N'.join(lines)
     return text
@@ -689,7 +689,22 @@ def handle_karaoke(transcription_result, style_options, replace_dict, video_reso
             for w_info in words:
                 w = process_subtitle_text(w_info.get('word', ''), replace_dict, all_caps, 0)
                 duration_cs = int(round((w_info['end'] - w_info['start']) * 100))
-                highlighted_word = f"{{\\k{duration_cs}}}{w} "
+                # 檢查是否為中文字符
+                is_chinese = any('\u4e00' <= c <= '\u9fff' for c in w)
+                
+                # 檢查下一個詞是否為中文字符
+                next_is_chinese = False
+                word_index = words.index(w_info)
+                if word_index + 1 < len(words):
+                    next_word = process_subtitle_text(words[word_index + 1].get('word', ''), replace_dict, all_caps, 0)
+                    next_is_chinese = any('\u4e00' <= c <= '\u9fff' for c in next_word)
+                
+                # 如果是中文字符，或者是英文單詞但下一個詞是中文，不添加空格
+                if is_chinese or next_is_chinese:
+                    highlighted_word = f"{{\\k{duration_cs}}}{w}"
+                else:
+                    # 如果是英文單詞且下一個詞不是中文，添加空格
+                    highlighted_word = f"{{\\k{duration_cs}}}{w} "
                 current_line.append(highlighted_word)
                 current_line_words += 1
                 if current_line_words >= max_words_per_line:
@@ -703,7 +718,22 @@ def handle_karaoke(transcription_result, style_options, replace_dict, video_reso
             for w_info in words:
                 w = process_subtitle_text(w_info.get('word', ''), replace_dict, all_caps, 0)
                 duration_cs = int(round((w_info['end'] - w_info['start']) * 100))
-                highlighted_word = f"{{\\k{duration_cs}}}{w} "
+                # 檢查是否為中文字符
+                is_chinese = any('\u4e00' <= c <= '\u9fff' for c in w)
+                
+                # 檢查下一個詞是否為中文字符
+                next_is_chinese = False
+                word_index = words.index(w_info)
+                if word_index + 1 < len(words):
+                    next_word = process_subtitle_text(words[word_index + 1].get('word', ''), replace_dict, all_caps, 0)
+                    next_is_chinese = any('\u4e00' <= c <= '\u9fff' for c in next_word)
+                
+                # 如果是中文字符，或者是英文單詞但下一個詞是中文，不添加空格
+                if is_chinese or next_is_chinese:
+                    highlighted_word = f"{{\\k{duration_cs}}}{w}"
+                else:
+                    # 如果是英文單詞且下一個詞不是中文，添加空格
+                    highlighted_word = f"{{\\k{duration_cs}}}{w} "
                 line_content.append(highlighted_word)
             lines_content = [''.join(line_content).strip()]
 
