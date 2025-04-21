@@ -14,3 +14,10 @@ services:
       - ./data:/app/data
       - ./services:/app/services
     restart: unless-stopped
+        # 添加記憶體限制設定
+    deploy:
+      resources:
+        limits:
+          memory: 32G
+        reservations:
+          memory: 16G

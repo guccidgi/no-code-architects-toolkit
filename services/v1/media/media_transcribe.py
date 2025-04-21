@@ -22,6 +22,7 @@ import srt
 from datetime import timedelta
 from whisper.utils import WriteSRT, WriteVTT
 from services.file_management import download_file
+from services.v1.video.caption_video import identify_words, is_english_word
 import logging
 from config import LOCAL_STORAGE_PATH
 
@@ -75,7 +76,7 @@ def process_transcribe_media(media_url, task, include_text, include_srt, include
                 word_timings = []
                 
                 for segment in result['segments']:
-                    words = segment['text'].strip().split()
+                    words = identify_words(segment['text'].strip())
                     segment_start = segment['start']
                     segment_end = segment['end']
                     
@@ -98,12 +99,18 @@ def process_transcribe_media(media_url, task, include_text, include_srt, include
                     chunk_start = word_timings[current_word][0]
                     chunk_end = word_timings[min(current_word + len(chunk) - 1, len(word_timings) - 1)][1]
                     
+                    # 檢查 chunk 是否全為中文
+                    if chunk and all(any('\u4e00' <= c <= '\u9fff' for c in word) for word in chunk):
+                        subtitle_text = ''.join(chunk)
+                    else:
+                        subtitle_text = ' '.join(chunk)
+                    
                     # Create the subtitle
                     srt_subtitles.append(srt.Subtitle(
                         subtitle_index,
                         timedelta(seconds=chunk_start),
                         timedelta(seconds=chunk_end),
-                        ' '.join(chunk)
+                        subtitle_text
                     ))
                     subtitle_index += 1
                     current_word += words_per_line
