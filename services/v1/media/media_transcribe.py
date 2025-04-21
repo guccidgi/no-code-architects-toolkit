@@ -19,6 +19,7 @@
 import os
 import whisper
 import srt
+import re
 from datetime import timedelta
 from whisper.utils import WriteSRT, WriteVTT
 from services.file_management import download_file
@@ -71,41 +72,77 @@ def process_transcribe_media(media_url, task, include_text, include_srt, include
             subtitle_index = 1
             
             if words_per_line and words_per_line > 0:
-                # Collect all words and their timings
+                # 自行實現中文字符分割，確保正確計算字數
+                def split_chinese_text(text):
+                    # 使用正則表達式分割中英文
+                    # 英文單詞、數字和標點符號作為整體
+                    # 中文字符單獨處理
+                    pattern = r'[A-Za-z0-9]+|[\u4e00-\u9fff]|[^\s\w\u4e00-\u9fff]+'
+                    return [m for m in re.findall(pattern, text) if m.strip()]
+                
+                # 收集所有文字和時間
                 all_words = []
-                word_timings = []
+                all_timings = []
                 
+                # 記錄處理過程
+                logger.info(f"Processing with words_per_line={words_per_line}")
+                
+                # 收集所有文字和對應的時間點
                 for segment in result['segments']:
-                    words = identify_words(segment['text'].strip())
-                    segment_start = segment['start']
-                    segment_end = segment['end']
+                    seg_text = segment['text'].strip()
+                    # 使用我們自己的分詞函數，確保中文字符被正確分割
+                    seg_words = split_chinese_text(seg_text)
+                    seg_start = segment['start']
+                    seg_end = segment['end']
                     
-                    # Calculate timing for each word
-                    if words:
-                        duration_per_word = (segment_end - segment_start) / len(words)
-                        for i, word in enumerate(words):
-                            word_start = segment_start + (i * duration_per_word)
-                            word_end = word_start + duration_per_word
-                            all_words.append(word)
-                            word_timings.append((word_start, word_end))
+                    if not seg_words:
+                        continue
+                    
+                    logger.info(f"Segment: {seg_text}")
+                    logger.info(f"Words count: {len(seg_words)}, Words: {seg_words}")
+                    
+                    # 計算每個詞的時間
+                    duration_per_word = (seg_end - seg_start) / len(seg_words)
+                    
+                    # 為每個詞計算時間點
+                    for i, word in enumerate(seg_words):
+                        word_start = seg_start + i * duration_per_word
+                        word_end = word_start + duration_per_word
+                        all_words.append(word)
+                        all_timings.append((word_start, word_end))
                 
-                # Process words in chunks of words_per_line
-                current_word = 0
-                while current_word < len(all_words):
-                    # Get the next chunk of words
-                    chunk = all_words[current_word:current_word + words_per_line]
+                logger.info(f"Total words: {len(all_words)}")
+                
+                # 嚴格按照 words_per_line 分割所有文字
+                for i in range(0, len(all_words), words_per_line):
+                    chunk = all_words[i:i + words_per_line]
                     
-                    # Calculate timing for this chunk
-                    chunk_start = word_timings[current_word][0]
-                    chunk_end = word_timings[min(current_word + len(chunk) - 1, len(word_timings) - 1)][1]
+                    if not chunk:
+                        continue
                     
-                    # 檢查 chunk 是否全為中文
-                    if chunk and all(any('\u4e00' <= c <= '\u9fff' for c in word) for word in chunk):
+                    # 計算這個 chunk 的開始和結束時間
+                    chunk_start = all_timings[i][0]
+                    chunk_end = all_timings[min(i + len(chunk) - 1, len(all_timings) - 1)][1]
+                    
+                    # 檢查是否全為中文
+                    has_chinese = False
+                    has_non_chinese = False
+                    
+                    for word in chunk:
+                        if any('\u4e00' <= c <= '\u9fff' for c in word):
+                            has_chinese = True
+                        else:
+                            has_non_chinese = True
+                    
+                    # 如果全是中文，不加空格；否則用空格連接
+                    if has_chinese and not has_non_chinese:
                         subtitle_text = ''.join(chunk)
                     else:
                         subtitle_text = ' '.join(chunk)
                     
-                    # Create the subtitle
+                    logger.info(f"Subtitle {subtitle_index}: {subtitle_text} (words: {len(chunk)})")
+                    
+                    # 建立字幕
                     srt_subtitles.append(srt.Subtitle(
                         subtitle_index,
                         timedelta(seconds=chunk_start),
@@ -113,7 +150,6 @@ def process_transcribe_media(media_url, task, include_text, include_srt, include
                         subtitle_text
                     ))
                     subtitle_index += 1
-                    current_word += words_per_line
             else:
                 # Original behavior - one subtitle per segment
                 for segment in result['segments']:
