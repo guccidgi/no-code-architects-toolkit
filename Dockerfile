@@ -154,9 +154,10 @@ WORKDIR /app
 
 # Set environment variable for Whisper cache
 ENV WHISPER_CACHE_DIR="/app/whisper_cache"
+ENV XDG_CACHE_HOME="/app/cache"
 
-# Create cache directory (no need for chown here yet)
-RUN mkdir -p ${WHISPER_CACHE_DIR} 
+# Create cache directories with proper permissions
+RUN mkdir -p ${WHISPER_CACHE_DIR} && mkdir -p ${XDG_CACHE_HOME}
 
 # Copy the requirements file first to optimize caching
 COPY requirements.txt .
@@ -170,27 +171,29 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Create the appuser 
 RUN useradd -m appuser 
 
-# Give appuser ownership of the /app directory (including whisper_cache)
-RUN chown appuser:appuser /app 
+# Give appuser ownership of the /app directory and all cache directories
+RUN chown -R appuser:appuser /app
 
-# Copy the application code
+# Copy the script files and set permissions
+COPY run_gunicorn.sh /app/run_gunicorn.sh
+COPY download_whisper_model.py /app/download_whisper_model.py
+COPY startup.sh /app/startup.sh
+
+# Copy the rest of the application code
 COPY . .
 
-# Ensure the script has execution permission (before switching to appuser)
-RUN chmod +x /app/run_gunicorn.sh
+# Make the scripts executable and set ownership
+RUN chmod -R +x /app/*.sh /app/*.py && \
+    chown -R appuser:appuser /app
 
-# Expose the application port
-EXPOSE 8080
-
-# 設定環境變數
-ENV PYTHONUNBUFFERED=1
-ENV GUNICORN_WORKERS=2
-ENV GUNICORN_TIMEOUT=300
-
-# 切換到 appuser
+# Switch to the appuser for security
 USER appuser
 
-RUN python -c "import os; print(os.environ.get('WHISPER_CACHE_DIR')); import whisper; whisper.load_model('base')"
+# Expose the port the app runs on
+EXPOSE 8080
 
-# 直接使用 gunicorn 命令而不是通過腳本，使用 exec 形式以支持多架構
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "300", "--worker-class", "sync", "--keep-alive", "80", "app:app"]
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Run the startup script with bash explicitly
+CMD ["/bin/bash", "/app/startup.sh"]
