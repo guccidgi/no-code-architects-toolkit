@@ -173,28 +173,24 @@ RUN useradd -m appuser
 # Give appuser ownership of the /app directory (including whisper_cache)
 RUN chown appuser:appuser /app 
 
-# Important: Switch to the appuser before downloading the model
+# Copy the application code
+COPY . .
+
+# Ensure the script has execution permission (before switching to appuser)
+RUN chmod +x /app/run_gunicorn.sh
+
+# Expose the application port
+EXPOSE 8080
+
+# 設定環境變數
+ENV PYTHONUNBUFFERED=1
+ENV GUNICORN_WORKERS=2
+ENV GUNICORN_TIMEOUT=300
+
+# 切換到 appuser
 USER appuser
 
 RUN python -c "import os; print(os.environ.get('WHISPER_CACHE_DIR')); import whisper; whisper.load_model('base')"
 
-# Copy the rest of the application code
-COPY . .
-
-# Expose the port the app runs on
-EXPOSE 8080
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
-
-RUN echo '#!/bin/bash\n\
-gunicorn --bind 0.0.0.0:8080 \
-    --workers ${GUNICORN_WORKERS:-2} \
-    --timeout ${GUNICORN_TIMEOUT:-300} \
-    --worker-class sync \
-    --keep-alive 80 \
-    app:app' > /app/run_gunicorn.sh && \
-    chmod +x /app/run_gunicorn.sh
-
-# Run the shell script
-CMD ["/app/run_gunicorn.sh"]
+# 直接使用 gunicorn 命令而不是通過腳本，使用 exec 形式以支持多架構
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "300", "--worker-class", "sync", "--keep-alive", "80", "app:app"]
